@@ -1,52 +1,132 @@
-name: Build Ren'Py modules
+name: Build Windows modules (Python 2.7)
 
 on:
   push:
   pull_request:
   workflow_dispatch:
 
-jobs:
-  linux-modules:
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Check out Ren'Py
-        uses: actions/checkout@v4
+permissions:
+  contents: read
 
-      - name: Set up Python
+jobs:
+  windows-modules:
+    # The official build system cross-compiles Windows binaries on Linux.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, i686]
+    env:
+      PYTHONHASHSEED: "0"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Check out historical Ren'Py build tools
+        uses: actions/checkout@v4
+        with:
+          repository: renpy/renpy-build
+          # March 2025: still supports Ren'Py 7 and Python 2.7.18.
+          ref: 7cca685a19d18d8d2c330616fdb160618b5a9669
+          path: build-tools
+          persist-credentials: false
+
+      - name: Check out this revision, including the WebM fix
+        uses: actions/checkout@v4
+        with:
+          path: build-tools/renpy
+          persist-credentials: false
+
+      - name: Check out matching pygame_sdl2
+        uses: actions/checkout@v4
+        with:
+          repository: renpy/pygame_sdl2
+          ref: 567424fe7f4c391dda1431c4e7e3e9db44353838
+          path: build-tools/pygame_sdl2
+          persist-credentials: false
+
+      - name: Set up build orchestrator
+        # Only the build orchestrator uses Python 3. The host interpreter,
+        # generated Cython modules, and Windows runtime use Python 2.7.18.
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install native dependencies
+      - name: Install host build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            gcc g++ python3-dev python3-venv pkg-config \
-            libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev \
-            libfreetype6-dev libfribidi-dev libharfbuzz-dev libglew-dev libpng-dev libjpeg-dev zlib1g-dev \
-            libsdl2-dev libsdl2-image-dev libsdl2-gfx-dev libsdl2-mixer-dev libsdl2-ttf-dev
+            build-essential ccache unzip autoconf autoconf-archive automake libtool-bin \
+            pkg-config cmake clang-15 llvm-15 lld-15 python2-dev \
+            libssl-dev libbz2-dev liblzma-dev libffi-dev zlib1g-dev \
+            libavcodec-dev libavformat-dev libswresample-dev libswscale-dev \
+            libfreetype6-dev libfribidi-dev libharfbuzz-dev libglew-dev libpng-dev \
+            libsdl2-dev libsdl2-image-dev libjpeg-dev bc bison flex gettext
+          python -m venv "$RUNNER_TEMP/renpy-build-venv"
+          "$RUNNER_TEMP/renpy-build-venv/bin/python" -m pip install -r build-tools/requirements.txt
+          echo "$RUNNER_TEMP/renpy-build-venv/bin" >> "$GITHUB_PATH"
 
-      - name: Create build environment
+      - name: Build Python 2.7 Windows runtime and native modules
+        working-directory: build-tools
         run: |
-          python3 -m venv .venv
-          . .venv/bin/activate
-          python -m pip install --upgrade pip
-          python -m pip install "Cython<3" future six typing pefile requests ecdsa
-          git clone --depth 1 https://github.com/renpy/pygame_sdl2.git "$RUNNER_TEMP/pygame_sdl2"
-          python "$RUNNER_TEMP/pygame_sdl2/setup.py" install
-          python "$RUNNER_TEMP/pygame_sdl2/setup.py" install_headers
+          # Do not run prepare.sh: its nightly update step replaces source refs.
+          # Cython resolves pygame_sdl2 declarations through Ren'Py's parent path.
+          ln -s ../pygame_sdl2 renpy/pygame_sdl2
+          # This builds CPython 2.7.18, FFmpeg, SDL, pygame_sdl2, and Ren'Py.
+          python build.py --python 2 --platform windows --arch "${{ matrix.arch }}"
 
-      - name: Compile native modules
+      - name: Verify and package Windows modules
         env:
-          RENPY_DEPS_INSTALL: /usr:/usr/lib/x86_64-linux-gnu
-          RENPY_CYTHON: cython
+          TARGET_ARCH: ${{ matrix.arch }}
+        working-directory: build-tools
         run: |
-          . .venv/bin/activate
-          python module/setup.py build --build-base "$GITHUB_WORKSPACE/build/renpy-modules"
+          tmp/host/bin/python2 -c 'import sys; assert sys.version_info[:3] == (2, 7, 18), sys.version'
+          runtime="renpy/lib/py2-windows-$TARGET_ARCH"
+          test -s "$runtime/librenpython.dll"
+          test -s "$runtime/libpython2.7.dll"
+          test -s "$runtime/python.exe"
+          test -s renpy/lib/python2.7/site.pyo
+          file "$runtime/librenpython.dll" "$runtime/python.exe"
+          mkdir -p "$GITHUB_WORKSPACE/artifact/lib"
+          cp -a "$runtime" "$GITHUB_WORKSPACE/artifact/lib/"
+          cp -a renpy/lib/python2.7 "$GITHUB_WORKSPACE/artifact/lib/"
+          if [ "$TARGET_ARCH" = x86_64 ]; then
+            cp renpy/renpy2.exe "$GITHUB_WORKSPACE/artifact/renpy.exe"
+          else
+            cp renpy/renpy-32.exe "$GITHUB_WORKSPACE/artifact/renpy-32.exe"
+          fi
+          git -C renpy rev-parse HEAD > "$GITHUB_WORKSPACE/artifact/SOURCE_COMMIT.txt"
+          cp renpy/.github/WINDOWS-PYTHON2-BUILD.md "$GITHUB_WORKSPACE/artifact/README.md"
 
-      - name: Upload compiled modules
+      - name: Upload Windows Python 2.7 modules
         uses: actions/upload-artifact@v4
         with:
-          name: renpy-modules-linux-x86_64
-          path: build/renpy-modules
+          name: renpy-7.8.7-windows-${{ matrix.arch }}-python2.7
+          path: artifact/
           if-no-files-found: error
+          retention-days: 30
+
+  verify-windows:
+    name: Verify Windows Python 2.7 (${{ matrix.arch }})
+    needs: windows-modules
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            bits: 64
+          - arch: i686
+            bits: 32
+    steps:
+      - name: Download compiled runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: renpy-7.8.7-windows-${{ matrix.arch }}-python2.7
+          path: artifact
+
+      - name: Check Python version, architecture, and compiled modules
+        shell: pwsh
+        run: |
+          # Execute the artifact's interpreter; do not use the runner's Python.
+          & "./artifact/lib/py2-windows-${{ matrix.arch }}/python.exe" -c "import sys, struct; print(sys.version); assert sys.version_info[:3] == (2, 7, 18); assert struct.calcsize('P') * 8 == ${{ matrix.bits }}; assert all(m in sys.builtin_module_names for m in ('_renpy', 'renpy.audio.renpysound', 'pygame_sdl2.display'))"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
