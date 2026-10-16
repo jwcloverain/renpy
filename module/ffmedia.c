@@ -519,6 +519,12 @@ static AVPacket *read_packet(MediaState *ms, PacketQueue *pq) {
 		}
 
 		if (av_read_frame(ms->ctx, pkt)) {
+			/* av_read_frame() does not release the packet supplied by the
+			 * caller when it reaches EOF (or reports an I/O error). This is
+			 * especially easy to hit repeatedly with WebM files, since the
+			 * decoder can continue asking for packets after the last frame.
+			 */
+			av_packet_free(&pkt);
 			return NULL;
 		}
 
