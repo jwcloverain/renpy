@@ -36,6 +36,17 @@ jobs:
           path: build-tools/renpy
           persist-credentials: false
 
+      - name: Select Ren'Py 7 release version metadata
+        working-directory: build-tools/renpy
+        run: |
+          # versions.py supports Python 2 only on its "fix" release branch.
+          # Custom branches and detached PR checkouts otherwise select "main",
+          # whose version table only contains Python 3 (Ren'Py 8).
+          # Set the local CI branch name while preserving the triggering commit.
+          source_commit=$(git rev-parse HEAD)
+          git switch -C fix
+          test "$(git rev-parse HEAD)" = "$source_commit"
+
       - name: Download matching pygame_sdl2 sources
         # This revision has a pygame_sdl2_windeps gitlink without .gitmodules.
         # checkout's credential cleanup runs submodule foreach even when
@@ -87,6 +98,10 @@ jobs:
         working-directory: build-tools
         run: |
           tmp/host/bin/python2 -c 'import sys; assert sys.version_info[:3] == (2, 7, 18), sys.version'
+          (
+            cd renpy
+            "../tmp/install.windows-$TARGET_ARCH/bin/hostpython2" -c 'import renpy; assert renpy.version_tuple[:3] == (7, 8, 7), renpy.version; print(renpy.version)'
+          )
           runtime="renpy/lib/py2-windows-$TARGET_ARCH"
           test -s "$runtime/librenpython.dll"
           test -s "$runtime/libpython2.7.dll"

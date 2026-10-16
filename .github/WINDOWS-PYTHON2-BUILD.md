@@ -24,6 +24,10 @@ the Windows native dependencies on Ubuntu. Python 3.11 runs the build
 orchestrator only; the generated modules and runtime target Python 2.7.18.
 Build-tool and pygame_sdl2 revisions are pinned in the workflow. The Ren'Py
 source revision comes from the triggering commit, including its local fixes.
+The checkout is assigned the local branch name `fix` during CI because the
+historical version resolver only defines the Python 2 release on that branch.
+This preserves the triggering commit and does not change any remote branch.
+The build also checks that the source package resolves to Ren'Py 7.8.7.
 
 A subsequent Windows job executes each compiled interpreter and checks its
 Python version, pointer size, and registration of the native media module.
