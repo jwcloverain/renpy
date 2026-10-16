@@ -36,13 +36,20 @@ jobs:
           path: build-tools/renpy
           persist-credentials: false
 
-      - name: Check out matching pygame_sdl2
-        uses: actions/checkout@v4
-        with:
-          repository: renpy/pygame_sdl2
-          ref: 567424fe7f4c391dda1431c4e7e3e9db44353838
-          path: build-tools/pygame_sdl2
-          persist-credentials: false
+      - name: Download matching pygame_sdl2 sources
+        # This revision has a pygame_sdl2_windeps gitlink without .gitmodules.
+        # checkout's credential cleanup runs submodule foreach even when
+        # submodules are disabled. An archive avoids that broken Git metadata.
+        # Windows dependencies are built by renpy-build, not this old gitlink.
+        env:
+          PYGAME_SDL2_REF: 567424fe7f4c391dda1431c4e7e3e9db44353838
+        run: |
+          curl --fail --location --retry 3 \
+            "https://codeload.github.com/renpy/pygame_sdl2/tar.gz/$PYGAME_SDL2_REF" \
+            --output "$RUNNER_TEMP/pygame_sdl2.tar.gz"
+          mkdir -p build-tools/pygame_sdl2
+          tar -xzf "$RUNNER_TEMP/pygame_sdl2.tar.gz" \
+            --directory build-tools/pygame_sdl2 --strip-components=1
 
       - name: Set up build orchestrator
         # Only the build orchestrator uses Python 3. The host interpreter,
